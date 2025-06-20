@@ -6,6 +6,7 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.models.kyc_job import KYCJob
+from app.models.user import User
 from app.schemas.kyc import (
     KYCSubmit, KYCStatus, KYCTierInfo, 
     KYCVerificationResult, SmartContractStatus
@@ -26,6 +27,19 @@ async def submit_kyc(
     """
     Submit a new KYC verification request with tier support.
     """
+    # TODO: remove this check in production
+    # Create user if it doesn't exist
+    user = db.query(User).filter(User.id == kyc_data.user_id).first()
+    if not user:
+        user = User(
+            id=kyc_data.user_id,
+            email=kyc_data.email,
+            phone=kyc_data.phone
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    
     # Check if user already has pending KYC
     existing_kyc = db.query(KYCJob).filter(
         KYCJob.user_id == kyc_data.user_id,

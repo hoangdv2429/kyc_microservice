@@ -22,6 +22,13 @@ class PendingKYC(BaseModel):
     full_name: str
     email: Optional[str] = None
     risk_score: Optional[float] = None
+    # Document URLs for admin review
+    doc_front: Optional[str] = None
+    doc_back: Optional[str] = None
+    selfie: Optional[str] = None
+    # Additional verification metrics
+    face_score: Optional[float] = None
+    liveness_score: Optional[float] = None
     
     class Config:
         from_attributes = True

@@ -118,11 +118,32 @@ async def review_kyc(
             detail="KYC job is not pending review",
         )
     
-    kyc_job.status = review.decision
+    # Map frontend decision to backend status
+    status_mapping = {
+        "approved": "passed",
+        "rejected": "rejected",
+        "passed": "passed"
+    }
+    final_status = status_mapping.get(review.decision, review.decision)
+    
+    # TODO on production should be already created by other services
+    # Create or get reviewer user if not exists
+    reviewer = db.query(User).filter(User.id == review.reviewer_id).first()
+    if not reviewer:
+        reviewer = User(
+            id=review.reviewer_id,
+            email=f"admin.{review.reviewer_id}@echofi.com",
+            phone=None
+        )
+        db.add(reviewer)
+        db.commit()
+        db.refresh(reviewer)
+    
+    kyc_job.status = final_status
     kyc_job.reviewer_id = review.reviewer_id
     kyc_job.reviewed_at = datetime.utcnow()
     kyc_job.note = review.note
-    kyc_job.kyc_tier = 2 if review.decision == "passed" else 0
+    kyc_job.kyc_tier = 2 if final_status == "passed" else 0
     kyc_job.auto_approved = False
     
     db.commit()
@@ -135,7 +156,7 @@ async def review_kyc(
         timestamp=datetime.utcnow(),
         details={
             "reviewer_id": str(review.reviewer_id),
-            "decision": review.decision,
+            "decision": final_status,
             "note": review.note
         }
     )
