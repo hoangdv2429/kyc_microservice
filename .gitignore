@@ -135,5 +135,9 @@ celerybeat.pid
 *.xml
 *.xlsx
 
+# Test results
+kyc_test_results.json
+test_results_*.json
+
 # Alembic
 backend/migrations/versions/*.pyc

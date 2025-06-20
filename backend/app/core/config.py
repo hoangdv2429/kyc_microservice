@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     RABBITMQ_USER: str
     RABBITMQ_PASSWORD: str
 
+    # Redis
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+
     # MinIO/S3
     MINIO_ENDPOINT: str
     MINIO_ACCESS_KEY: str
