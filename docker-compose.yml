@@ -85,28 +85,26 @@ services:
       - redis
     volumes:
       - ./backend:/app
-      - celery_beat_data:/var/lib/celery
-    command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/var/lib/celery/celerybeat-schedule
+      - celery_beat_data:/app/celerybeat
+    command: sh -c "celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule"
     environment:
       - PYTHONPATH=/app
+      - CELERYBEAT_SCHEDULE_FILENAME=/app/celerybeat/celerybeat-schedule
 
   # Celery flower for monitoring
   celery-flower:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: mher/flower:2.0.1
     env_file:
       - .env
     depends_on:
       - rabbitmq
       - redis
-    volumes:
-      - ./backend:/app
     ports:
       - "5555:5555"
-    command: celery -A app.workers.celery_app flower --port=5555
     environment:
-      - PYTHONPATH=/app
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-kyc_user}:${RABBITMQ_PASSWORD:-kyc_password}@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - FLOWER_PORT=5555
 
   postgres:
     image: postgres:15
@@ -172,7 +170,7 @@ services:
       sleep 10;
       mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin};
       mc mb local/kyc-documents --ignore-existing;
-      mc policy set download local/kyc-documents;
+      mc anonymous set download local/kyc-documents;
       "
 
   prometheus:

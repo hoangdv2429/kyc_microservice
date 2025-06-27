@@ -21,6 +21,7 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     broker_connection_retry_on_startup=True,
+    beat_schedule_filename="/app/celerybeat/celerybeat-schedule",
 )
 
 # Configure periodic tasks for compliance and maintenance

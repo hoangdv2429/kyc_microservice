@@ -1,21 +1,29 @@
 from typing import List
-from pydantic_settings import BaseSettings
-from pydantic import AnyHttpUrl, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        env_file=".env",
+        extra="allow"
+    )
+    
     PROJECT_NAME: str = "EchoFi KYC Service"
     API_V1_STR: str = "/api/v1"
     
-    # CORS
-    CORS_ORIGINS: List[AnyHttpUrl] = []
+    # CORS - Fix the type and validator
+    CORS_ORIGINS: List[str] = []
 
-    @validator("CORS_ORIGINS", pre=True)
-    def assemble_cors_origins(cls, v: str | List[str]) -> List[str] | str:
-        if isinstance(v, str) and not v.startswith("["):
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v):
+        if isinstance(v, str):
+            # Split by comma and strip whitespace
             return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
+        elif isinstance(v, list):
             return v
-        raise ValueError(v)
+        return []
 
     # Security
     SECRET_KEY: str
@@ -28,11 +36,17 @@ class Settings(BaseSettings):
     POSTGRES_DB: str
     SQLALCHEMY_DATABASE_URI: str | None = None
 
-    @validator("SQLALCHEMY_DATABASE_URI", pre=True)
-    def assemble_db_connection(cls, v: str | None, values: dict[str, any]) -> any:
+    @field_validator("SQLALCHEMY_DATABASE_URI", mode="before")
+    @classmethod
+    def assemble_db_connection(cls, v: str | None, values):
         if isinstance(v, str):
             return v
-        return f"postgresql://{values.get('POSTGRES_USER')}:{values.get('POSTGRES_PASSWORD')}@{values.get('POSTGRES_SERVER')}/{values.get('POSTGRES_DB')}"
+        # In Pydantic v2, we need to handle this differently
+        if hasattr(values, 'data'):
+            values_dict = values.data
+        else:
+            values_dict = values
+        return f"postgresql://{values_dict.get('POSTGRES_USER')}:{values_dict.get('POSTGRES_PASSWORD')}@{values_dict.get('POSTGRES_SERVER')}/{values_dict.get('POSTGRES_DB')}"
 
     # RabbitMQ
     RABBITMQ_HOST: str
@@ -50,7 +64,7 @@ class Settings(BaseSettings):
     MINIO_ACCESS_KEY: str
     MINIO_SECRET_KEY: str
     MINIO_BUCKET: str = "kyc-documents"
-    MINIO_SECURE: bool = True
+    MINIO_SECURE: bool = False
 
     # OCR Settings
     TESSERACT_CMD: str = "tesseract"
@@ -60,14 +74,14 @@ class Settings(BaseSettings):
     FACE_MATCH_THRESHOLD: float = 0.7
     LIVENESS_THRESHOLD: float = 0.8
 
-    # Email Settings
+    # Email Settings (made optional)
     SMTP_SERVER: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     EMAIL_USERNAME: str = ""
     EMAIL_PASSWORD: str = ""
     FROM_EMAIL: str = ""
 
-    # Telegram Settings
+    # Telegram Settings (made optional)
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_ADMIN_CHAT_ID: str = ""
 
@@ -76,12 +90,12 @@ class Settings(BaseSettings):
     MANUAL_REVIEW_THRESHOLD: float = 0.65
     KYC_DATA_RETENTION_DAYS: int = 1825  # 5 years
     
-    # Smart Contract Integration
+    # Smart Contract Integration (made optional)
     BLOCKCHAIN_RPC_URL: str = ""
     CONTRACT_ADDRESS: str = ""
     CONTRACT_PRIVATE_KEY: str = ""
     
-    # Security & Compliance
+    # Security & Compliance (made optional)
     AES_ENCRYPTION_KEY: str = ""
     GDPR_AUTO_DELETE_ENABLED: bool = True
     AUDIT_LOG_RETENTION_DAYS: int = 2555  # 7 years
@@ -90,11 +104,5 @@ class Settings(BaseSettings):
     MAX_REQUESTS_PER_DAY: int = 1000
     OCR_TIMEOUT_SECONDS: int = 30
     FACE_MATCH_TIMEOUT_SECONDS: int = 15
-
-    model_config = {
-        "case_sensitive": True,
-        "env_file": ".env",
-        "extra": "allow"  # Allow extra fields in the .env file
-    }
 
 settings = Settings()
