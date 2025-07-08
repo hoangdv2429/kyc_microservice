@@ -1,16 +1,28 @@
 from celery import Celery
-from celery.schedules import crontab
 from app.core.config import settings
+import os
 
-# Create Celery app with scheduled tasks
+# Use Redis as broker for minimal setup (no RabbitMQ required)
+broker_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+result_backend = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+
+# Create Celery app
 celery_app = Celery(
     "kyc_worker",
-    broker=f"amqp://{settings.RABBITMQ_USER}:{settings.RABBITMQ_PASSWORD}@{settings.RABBITMQ_HOST}:{settings.RABBITMQ_PORT}//",
-    backend=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
+    broker=broker_url,
+    backend=result_backend,
     include=["app.workers.tasks"]
 )
 
-# Configure Celery
+# Development mode - run tasks synchronously
+if os.getenv('CELERY_ALWAYS_EAGER', 'false').lower() == 'true':
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = True
+    print("🔧 Celery running in EAGER mode (synchronous tasks)")
+else:
+    print(f"🔧 Celery using Redis broker: {broker_url}")
+
+# Basic Celery configuration
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -18,56 +30,5 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     result_expires=60 * 60 * 24,  # 24 hours
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
     broker_connection_retry_on_startup=True,
-    beat_schedule_filename="/app/celerybeat/celerybeat-schedule",
-)
-
-# Configure periodic tasks for compliance and maintenance
-celery_app.conf.beat_schedule = {
-    # Cleanup expired KYC data daily at 2 AM
-    'cleanup-expired-kyc-data': {
-        'task': 'app.workers.tasks.cleanup_expired_data',
-        'schedule': crontab(hour=2, minute=0),
-    },
-    
-    # Generate compliance reports weekly on Sundays at 3 AM
-    'generate-compliance-reports': {
-        'task': 'app.workers.tasks.generate_compliance_report',
-        'schedule': crontab(hour=3, minute=0, day_of_week=0),
-    },
-    
-    # Health check every 5 minutes
-    'system-health-check': {
-        'task': 'app.workers.tasks.system_health_check',
-        'schedule': crontab(minute='*/5'),
-    },
-    
-    # Process pending blockchain updates every hour
-    'process-blockchain-updates': {
-        'task': 'app.workers.tasks.process_pending_contract_updates',
-        'schedule': crontab(minute=0),
-    },
-    
-    # Archive old audit logs monthly
-    'archive-audit-logs': {
-        'task': 'app.workers.tasks.archive_old_audit_logs',
-        'schedule': crontab(hour=1, minute=0, day_of_month=1),
-    }
-}
-
-# Task routes for different types of work
-celery_app.conf.task_routes = {
-    "app.workers.tasks.process_kyc": {"queue": "kyc-processing"},
-    "app.workers.tasks.run_advanced_ocr": {"queue": "ocr-processing"},
-    "app.workers.tasks.run_face_analysis": {"queue": "face-processing"},
-    "app.workers.tasks.send_notifications": {"queue": "notifications"},
-    "app.workers.tasks.cleanup_expired_data": {"queue": "maintenance"},
-    "app.workers.tasks.generate_compliance_report": {"queue": "maintenance"},
-    "app.workers.tasks.system_health_check": {"queue": "monitoring"},
-    "app.workers.tasks.process_pending_contract_updates": {"queue": "blockchain"},
-    "app.workers.tasks.archive_old_audit_logs": {"queue": "maintenance"},
-}
-
-celery_app.conf.timezone = 'UTC' 
+) 

@@ -9,7 +9,7 @@ class Settings(BaseSettings):
         extra="allow"
     )
     
-    PROJECT_NAME: str = "EchoFi KYC Service"
+    PROJECT_NAME: str = "KYC Service"
     API_V1_STR: str = "/api/v1"
     
     # CORS - Fix the type and validator
@@ -60,11 +60,22 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
 
     # MinIO/S3
-    MINIO_ENDPOINT: str
+    MINIO_INTERNAL_ENDPOINT: str = "minio:9000"  # For backend-to-MinIO communication
+    MINIO_EXTERNAL_ENDPOINT: str = "localhost:9000"  # For frontend-to-MinIO communication
     MINIO_ACCESS_KEY: str
     MINIO_SECRET_KEY: str
-    MINIO_BUCKET: str = "kyc-documents"
+    MINIO_BUCKET_NAME: str = "kyc-documents"
     MINIO_SECURE: bool = False
+    
+    @property
+    def internal_minio_endpoint(self) -> str:
+        """Get the internal MinIO endpoint for backend operations"""
+        return self.MINIO_INTERNAL_ENDPOINT
+    
+    @property
+    def external_minio_endpoint(self) -> str:
+        """Get the external MinIO endpoint for frontend operations"""
+        return self.MINIO_EXTERNAL_ENDPOINT
 
     # OCR Settings
     TESSERACT_CMD: str = "tesseract"

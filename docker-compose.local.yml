@@ -1,0 +1,111 @@
+# docker-compose.minimal.yml - Essential services only
+services:
+  api:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+    environment:
+      - PYTHONPATH=/app
+      - CELERY_ALWAYS_EAGER=true  # Run tasks synchronously for development
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Single worker (only if you need async processing)
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env.local
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
+    environment:
+      - PYTHONPATH=/app
+    profiles: ["with-worker"]  # Optional service
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: kyc_user
+      POSTGRES_PASSWORD: kyc_password
+      POSTGRES_DB: kyc_db
+    volumes:
+      - postgres_minimal_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kyc_user -d kyc_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_minimal_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_minimal_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  minio-setup:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for MinIO...';
+      sleep 5;
+      mc alias set local http://minio:9000 minioadmin minioadmin123;
+      mc mb local/kyc-documents --ignore-existing;
+      mc anonymous set download local/kyc-documents;
+      echo 'MinIO setup complete';
+      "
+
+volumes:
+  postgres_minimal_data:
+  redis_minimal_data:
+  minio_minimal_data:

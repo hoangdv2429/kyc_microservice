@@ -13,11 +13,21 @@ from app.core.database import SessionLocal
 from app.models.kyc_job import KYCJob
 from app.models.audit_log import AuditLog
 from app.workers.celery_app import celery_app
+from celery import current_app as celery_current_app
 import os
 import requests
 from celery import shared_task
 from datetime import datetime, timedelta
 import logging
+import json
+
+# Fix for PIL.Image.ANTIALIAS deprecation
+try:
+    # For newer Pillow versions
+    PIL_RESAMPLE = Image.LANCZOS
+except AttributeError:
+    # Fallback for older versions
+    PIL_RESAMPLE = Image.ANTIALIAS
 
 # Import our new services
 from app.services.ocr_service import OCRService
@@ -30,9 +40,28 @@ from app.utils.encryption import encryption
 
 logger = logging.getLogger(__name__)
 
+def make_json_serializable(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    else:
+        return obj
+
 # Initialize MinIO client
 minio_client = Minio(
-    settings.MINIO_ENDPOINT,
+    settings.MINIO_INTERNAL_ENDPOINT,
     access_key=settings.MINIO_ACCESS_KEY,
     secret_key=settings.MINIO_SECRET_KEY,
     secure=settings.MINIO_SECURE,
@@ -73,16 +102,32 @@ def process_kyc(ticket_id: str) -> None:
 
         # Step 1: Run OCR on documents
         logger.info(f"Starting OCR processing for {ticket_id}")
-        ocr_result = run_advanced_ocr.delay(kyc_job.doc_front, kyc_job.doc_back).get()
+        # Check if running in eager mode
+        if celery_app.conf.task_always_eager:
+            # In eager mode, call function directly
+            ocr_result = run_advanced_ocr(kyc_job.doc_front, kyc_job.doc_back)
+        else:
+            # In normal mode, use Celery task
+            ocr_result = run_advanced_ocr.delay(kyc_job.doc_front, kyc_job.doc_back).get()
+
+        # Make OCR result JSON serializable
+        ocr_result = make_json_serializable(ocr_result)
         kyc_job.ocr_json = ocr_result
         db.commit()
 
         # Step 2: Run face matching and liveness detection
         logger.info(f"Starting face matching for {ticket_id}")
-        face_result = run_face_analysis.delay(
-            kyc_job.doc_front,
-            kyc_job.selfie
-        ).get()
+
+        # Check if running in eager mode
+        if celery_app.conf.task_always_eager:
+            # In eager mode, call function directly
+            face_result = run_face_analysis(kyc_job.doc_front, kyc_job.selfie)
+        else:
+            # In normal mode, use Celery task
+            face_result = run_face_analysis.delay(kyc_job.doc_front, kyc_job.selfie).get()
+        
+        # Make face result JSON serializable
+        face_result = make_json_serializable(face_result)
         kyc_job.face_score = face_result.get("face_score", 0)
         kyc_job.liveness_score = face_result.get("liveness_score", 0)
         db.commit()
@@ -119,7 +164,12 @@ def process_kyc(ticket_id: str) -> None:
         db.commit()
 
         # Step 6: Send notifications
-        send_notifications.delay(str(kyc_job.ticket_id))
+        if celery_app.conf.task_always_eager:
+            # In eager mode, call function directly
+            send_notifications(str(kyc_job.ticket_id))
+        else:
+            # In normal mode, use Celery task
+            send_notifications.delay(str(kyc_job.ticket_id))
 
         # Step 7: Update smart contract (if approved)
         if kyc_job.status == "passed" and kyc_job.user_id:
@@ -131,31 +181,45 @@ def process_kyc(ticket_id: str) -> None:
 
     except Exception as e:
         logger.error(f"KYC processing failed for {ticket_id}: {str(e)}")
+        db.rollback()  # Rollback the transaction first
         if 'kyc_job' in locals():
             kyc_job.status = "failed"
             kyc_job.note = f"Processing error: {str(e)}"
+            kyc_job.reviewed_at = datetime.utcnow() # Set review time on failure
             db.commit()
     finally:
         db.close()
+
+def _replace_minio_host(url: str) -> str:
+    """Replace external MinIO host with internal host for worker access."""
+    if not hasattr(settings, 'MINIO_EXTERNAL_ENDPOINT') or not hasattr(settings, 'MINIO_INTERNAL_ENDPOINT'):
+        return url
+    if not settings.MINIO_EXTERNAL_ENDPOINT or not settings.MINIO_INTERNAL_ENDPOINT:
+        return url
+    return url.replace(settings.MINIO_EXTERNAL_ENDPOINT, settings.MINIO_INTERNAL_ENDPOINT)
 
 @celery_app.task(name="app.workers.tasks.run_advanced_ocr")
 def run_advanced_ocr(doc_front_url: str, doc_back_url: str) -> Dict[str, Any]:
     """Run advanced OCR on document images with multiple checks."""
     try:
+        # Replace host for internal worker access
+        internal_front_url = _replace_minio_host(doc_front_url)
+        internal_back_url = _replace_minio_host(doc_back_url)
+
         # Download images
         front_path = f"/tmp/ocr_front_{datetime.now().timestamp()}.jpg"
         back_path = f"/tmp/ocr_back_{datetime.now().timestamp()}.jpg"
         
         with open(front_path, "wb") as f:
-            f.write(requests.get(doc_front_url, timeout=30).content)
+            f.write(requests.get(internal_front_url, timeout=30).content)
         with open(back_path, "wb") as f:
-            f.write(requests.get(doc_back_url, timeout=30).content)
+            f.write(requests.get(internal_back_url, timeout=30).content)
 
-        # Extract data from front
-        front_data = ocr_service.extract_vietnamese_id_info(front_path)
+        # Extract data from front (main personal information)
+        front_data = ocr_service.extract_vietnamese_id_front(front_path)
         
-        # Extract data from back (if needed)
-        back_data = ocr_service.extract_vietnamese_id_info(back_path)
+        # Extract data from back (mrz, expiry, etc.)
+        back_data = ocr_service.extract_vietnamese_id_back(back_path)
         
         # Document authenticity check
         authenticity_front = ocr_service.verify_document_authenticity(front_path)
@@ -181,14 +245,18 @@ def run_advanced_ocr(doc_front_url: str, doc_back_url: str) -> Dict[str, Any]:
 def run_face_analysis(doc_url: str, selfie_url: str) -> Dict[str, Any]:
     """Run comprehensive face analysis including matching and liveness."""
     try:
+        # Replace host for internal worker access
+        internal_doc_url = _replace_minio_host(doc_url)
+        internal_selfie_url = _replace_minio_host(selfie_url)
+
         # Download images
         doc_path = f"/tmp/face_doc_{datetime.now().timestamp()}.jpg"
         selfie_path = f"/tmp/face_selfie_{datetime.now().timestamp()}.jpg"
         
         with open(doc_path, "wb") as f:
-            f.write(requests.get(doc_url, timeout=30).content)
+            f.write(requests.get(internal_doc_url, timeout=30).content)
         with open(selfie_path, "wb") as f:
-            f.write(requests.get(selfie_url, timeout=30).content)
+            f.write(requests.get(internal_selfie_url, timeout=30).content)
 
         # Face matching
         face_match_result = face_service.compare_faces(doc_path, selfie_path)

@@ -141,3 +141,6 @@ test_results_*.json
 
 # Alembic
 backend/migrations/versions/*.pyc
+
+# Frontend
+frontend/node_modules/*

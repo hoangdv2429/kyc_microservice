@@ -244,4 +244,4 @@ volumes:
   prometheus_data:
   grafana_data:
   elasticsearch_data:
-  celery_beat_data: 
+  celery_beat_data:

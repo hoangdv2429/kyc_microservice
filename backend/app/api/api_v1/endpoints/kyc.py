@@ -31,14 +31,32 @@ async def submit_kyc(
     # Create user if it doesn't exist
     user = db.query(User).filter(User.id == kyc_data.user_id).first()
     if not user:
+        # Check if user with same email or phone already exists
+        existing_user = db.query(User).filter(
+            (User.email == kyc_data.email) | (User.phone == kyc_data.phone)
+        ).first()
+        
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"User with email {kyc_data.email} or phone {kyc_data.phone} already exists",
+            )
+        
         user = User(
             id=kyc_data.user_id,
             email=kyc_data.email,
             phone=kyc_data.phone
         )
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to create user: {str(e)}",
+            )
     
     # Check if user already has pending KYC
     existing_kyc = db.query(KYCJob).filter(
@@ -51,6 +69,27 @@ async def submit_kyc(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User already has pending KYC verification",
         )
+    
+    # Check if user already has completed KYC (passed or recently failed)
+    completed_kyc = db.query(KYCJob).filter(
+        KYCJob.user_id == kyc_data.user_id,
+        KYCJob.status.in_(["passed", "rejected", "failed"])
+    ).first()
+    
+    if completed_kyc:
+        if completed_kyc.status == "passed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User already has passed KYC verification",
+            )
+        elif completed_kyc.status in ["rejected", "failed"]:
+            # Allow resubmission after 24 hours for failed/rejected KYC
+            from datetime import timedelta
+            if completed_kyc.reviewed_at and completed_kyc.reviewed_at > (datetime.utcnow() - timedelta(hours=24)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="User must wait 24 hours before resubmitting KYC after rejection/failure",
+                )
 
     # Create new KYC job
     kyc_job = KYCJob(

@@ -11,10 +11,10 @@ alembic==1.13.1
 
 # OCR and Computer Vision
 pytesseract==0.3.10
-easyocr==1.7.0
+easyocr==1.7.2
 opencv-python==4.9.0.80
 numpy==1.24.3
-Pillow==10.0.0
+Pillow==11.3.0
 
 # Deep Learning and AI
 # tensorflow-macos==2.15.0

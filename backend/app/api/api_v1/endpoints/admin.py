@@ -17,6 +17,11 @@ from app.services.email_service import EmailService
 from app.services.telegram_service import TelegramService
 from app.services.contract_service import SmartContractService
 from app.utils.encryption import encryption
+from fastapi.responses import StreamingResponse
+import requests
+import io
+import requests
+import io
 
 router = APIRouter()
 
@@ -254,4 +259,53 @@ async def get_kyc_stats(
         avg_liveness_score=sum(liveness_scores) / len(liveness_scores) if liveness_scores else 0,
         avg_risk_score=sum(risk_scores) / len(risk_scores) if risk_scores else 0,
         processing_time_avg=0  # TODO: Calculate from audit logs
-    ) 
+    )
+
+@router.get("/image/{ticket_id}/{image_type}")
+async def get_kyc_image(
+    ticket_id: UUID,
+    image_type: str,  # 'doc_front', 'doc_back', 'selfie'
+    db: Session = Depends(get_db)
+):
+    """Serve KYC images securely through backend proxy"""
+    kyc_job = db.query(KYCJob).filter(KYCJob.ticket_id == ticket_id).first()
+    if not kyc_job:
+        raise HTTPException(status_code=404, detail="KYC job not found")
+    
+    # Get the image URL based on type
+    image_url = None
+    if image_type == 'doc_front':
+        image_url = kyc_job.doc_front
+    elif image_type == 'doc_back':
+        image_url = kyc_job.doc_back
+    elif image_type == 'selfie':
+        image_url = kyc_job.selfie
+    
+    if not image_url:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    try:
+        # Convert external URL to internal URL for container-to-container communication
+        internal_image_url = image_url.replace("localhost:9000", "minio:9000")
+        
+        # Fetch image from MinIO (using internal network)
+        import requests
+        response = requests.get(internal_image_url, timeout=30)
+        response.raise_for_status()
+        
+        # Determine content type
+        content_type = "image/jpeg"
+        if image_url.endswith('.png'):
+            content_type = "image/png"
+        elif image_url.endswith('.jpg') or image_url.endswith('.jpeg'):
+            content_type = "image/jpeg"
+        
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type=content_type,
+            headers={"Content-Disposition": f"inline; filename={image_type}.jpg"}
+        )
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to fetch image {image_url}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch image")
